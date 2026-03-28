@@ -18,13 +18,26 @@ const C = {
 
 const FONT = "'Space Grotesk','DM Sans',system-ui,sans-serif";
 const MONO = "'IBM Plex Mono','JetBrains Mono',monospace";
-
 const DIV_COLORS = ["#43d9ad","#5b9cf6","#a78bfa","#ef6461","#f0b429","#e879a8","#36d6c5","#ff9f43","#7c83ff","#45b7d1","#96e6a1","#dda15e"];
 
-// ─── HELPER ────────────────────────────────────────────────────────────────
 const fmt = (n,d=1) => n==null?"—":n.toLocaleString("es-AR",{minimumFractionDigits:d,maximumFractionDigits:d});
 const fmtIdx = n => n==null?"—":n.toLocaleString("es-AR",{minimumFractionDigits:0,maximumFractionDigits:0});
 const monthLabel = d => { const [y,m]=d.split("-"); const ms=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; return `${ms[+m-1]} ${y.slice(2)}`; };
+
+// ─── TIME RANGE SELECTOR ──────────────────────────────────────────────────
+function TimeRangeSelector({ value, onChange }) {
+  return (
+    <div style={{ display: "flex", gap: 2 }}>
+      {[["all","Todo"],["3y","3 años"],["2y","2 años"],["1y","1 año"]].map(([k,l]) => (
+        <button key={k} onClick={() => onChange(k)} style={{
+          background: value===k ? C.tealBg : "transparent", color: value===k ? C.teal : C.dim,
+          border: `1px solid ${value===k ? C.tealBorder : "transparent"}`, borderRadius: 5,
+          padding: "3px 10px", fontSize: 10, fontFamily: MONO, cursor: "pointer", fontWeight: 500
+        }}>{l}</button>
+      ))}
+    </div>
+  );
+}
 
 // ─── MAIN ──────────────────────────────────────────────────────────────────
 export default function IPCDashboard() {
@@ -32,12 +45,10 @@ export default function IPCDashboard() {
   const [timeRange, setTimeRange] = useState("all");
   const [selDiv, setSelDiv] = useState(null);
 
-  // ─── LIVE PROXY DATA FROM RAILWAY API ──────────────────────────────────
   const [proxy, setProxy] = useState(null);
-  const [proxyStatus, setProxyStatus] = useState("loading"); // "loading" | "ok" | "error"
+  const [proxyStatus, setProxyStatus] = useState("loading");
 
   useEffect(() => {
-    // Fetch latest R&V IPC proxy data
     Promise.all([
       fetch(`${API_BASE}/api/v1/index/nivel-general`).then(r => r.json()).catch(() => null),
       fetch(`${API_BASE}/api/v1/index/divisiones`).then(r => r.json()).catch(() => null),
@@ -46,56 +57,52 @@ export default function IPCDashboard() {
       if (indexData && !indexData.error) {
         setProxy({ index: indexData, divisiones: divData, status: statusData });
         setProxyStatus("ok");
-      } else {
-        setProxyStatus("error");
-      }
+      } else { setProxyStatus("error"); }
     }).catch(() => setProxyStatus("error"));
   }, []);
 
-  // Build chart data
-  const chartData = useMemo(() => {
-    const d = RAW.dates;
-    const idx = RAW.nivelGeneral.indices;
-    const v = RAW.nivelGeneral.varMensual;
-    const yoy = RAW.nivelGeneral.varInteranual;
-    // indices has one extra (dec 2016 = base), varMensual starts jan 2017
-    return d.map((date, i) => ({
-      date, label: monthLabel(date),
-      indice: idx[i],
-      varMensual: i === 0 ? null : v[i-1],
-      varYoY: yoy[i - (d.length - yoy.length)] ?? null,
-    }));
-  }, []);
+  const refreshProxy = () => {
+    setProxyStatus("loading");
+    fetch(`${API_BASE}/api/v1/index/nivel-general`).then(r => r.json())
+      .then(d => { setProxy(p => ({ ...p, index: d })); setProxyStatus("ok"); })
+      .catch(() => setProxyStatus("error"));
+  };
 
-  const filtered = useMemo(() => {
-    if (timeRange === "all") return chartData;
+  // Build chart data for var mensual bars
+  const varMensualData = useMemo(() =>
+    RAW.datesVar.map((date, i) => ({ date, label: monthLabel(date), varMensual: RAW.nivelGeneral.varMensual[i] }))
+  , []);
+
+  // Build chart data for var interanual bars
+  const varYoYData = useMemo(() =>
+    RAW.datesYoY.map((date, i) => ({ date, label: monthLabel(date), varYoY: RAW.nivelGeneral.varInteranual[i] }))
+  , []);
+
+  // Apply time range filter
+  const filterByRange = (data) => {
+    if (timeRange === "all") return data;
     const n = timeRange === "3y" ? 36 : timeRange === "1y" ? 12 : 24;
-    return chartData.slice(-n);
-  }, [chartData, timeRange]);
+    return data.slice(-n);
+  };
 
-  const latest = chartData[chartData.length - 1];
-  const prev = chartData[chartData.length - 2];
+  const filteredMensual = useMemo(() => filterByRange(varMensualData), [varMensualData, timeRange]);
+  const filteredYoY = useMemo(() => filterByRange(varYoYData), [varYoYData, timeRange]);
+
   const latestVar = RAW.nivelGeneral.varMensual;
   const latestVarVal = latestVar[latestVar.length - 1];
   const latestYoY = RAW.nivelGeneral.varInteranual;
   const latestYoYVal = latestYoY[latestYoY.length - 1];
   const anualizada = ((Math.pow(1 + latestVarVal/100, 12) - 1) * 100);
+  const proxyVarAcum = proxy?.index?.variacion_periodo;
 
-  // Division bar data (last month var)
   const divData = RAW.divisiones.map((d, i) => ({
     ...d, color: DIV_COLORS[i],
     lastVar: d.varMensual[d.varMensual.length - 1],
     prevVar: d.varMensual[d.varMensual.length - 2],
   })).sort((a, b) => b.lastVar - a.lastVar);
 
-  // Categories data
-  const catData = Object.entries(RAW.categorias).map(([name, data]) => ({
-    name, lastVar: data.varMensual[data.varMensual.length - 1],
-  }));
-
   const tooltipStyle = { backgroundColor: C.card, border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontFamily: MONO, color: C.text };
 
-  // Selected division detail
   const selDivData = selDiv != null ? RAW.divisiones[selDiv] : null;
   const selDivChart = selDivData ? RAW.datesVar.map((date, i) => ({
     date, label: monthLabel(date), var: selDivData.varMensual[i],
@@ -127,13 +134,52 @@ export default function IPCDashboard() {
 
       <div style={{ padding: "20px 28px", maxWidth: 1200, margin: "0 auto" }}>
 
-        {/* ── TOP METRICS ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 20 }}>
-          <MetricBox label="Nivel general" value={fmtIdx(latest.indice)} sub={`Feb 2026`} accent />
-          <MetricBox label="Var. mensual" value={`+${fmt(latestVarVal)}%`} sub="Feb 2026 vs ene 2026" delta={latestVarVal - latestVar[latestVar.length - 2]} />
+        {/* ── TOP METRICS: 5 cards reordered ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 12 }}>
+          <MetricBox label="Nivel general INDEC" value={fmtIdx(RAW.nivelGeneral.indices[RAW.nivelGeneral.indices.length-1])} sub="Feb 2026" accent />
+          <MetricBox label="Var. mensual INDEC" value={`+${fmt(latestVarVal)}%`} sub="Feb 2026 vs ene 2026" delta={latestVarVal - latestVar[latestVar.length - 2]} />
+          <MetricBox label="Acumulada mes R&V" value={proxyVarAcum != null ? `+${fmt(proxyVarAcum)}%` : "—"} sub={proxy?.index?.fecha || "Conectando..."} highlight />
           <MetricBox label="Var. interanual" value={`+${fmt(latestYoYVal)}%`} sub="Feb 2026 vs feb 2025" />
           <MetricBox label="Inflación anualizada" value={`${fmt(anualizada)}%`} sub="Ritmo mensual compuesto" />
-          <MetricBox label="Acumulada desde base" value={`×${fmt(latest.indice/100, 0)}`} sub="Dic 2016 = 100" />
+        </div>
+
+        {/* ── R&V PROXY PANEL — right below metrics ── */}
+        <div style={{
+          background: C.card, border: `1px solid ${proxyStatus === "ok" ? C.tealBorder : C.border}`,
+          borderRadius: 10, padding: 14, marginBottom: 20,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 11, fontFamily: MONO, color: C.teal, letterSpacing: 1.5, textTransform: "uppercase" }}>R&V IPC PROXY — EN VIVO</span>
+              <span style={{
+                fontSize: 9, fontFamily: MONO, padding: "2px 8px", borderRadius: 4,
+                background: proxyStatus === "ok" ? "rgba(67,217,173,0.15)" : proxyStatus === "loading" ? "rgba(240,180,41,0.15)" : "rgba(239,100,97,0.15)",
+                color: proxyStatus === "ok" ? C.teal : proxyStatus === "loading" ? C.amber : C.red,
+              }}>
+                {proxyStatus === "ok" ? "CONECTADO" : proxyStatus === "loading" ? "CONECTANDO..." : "OFFLINE"}
+              </span>
+            </div>
+            <button onClick={refreshProxy} style={{
+              background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6,
+              color: C.muted, fontSize: 10, fontFamily: MONO, padding: "4px 12px", cursor: "pointer",
+            }}>Actualizar</button>
+          </div>
+
+          {proxyStatus === "ok" && proxy?.index ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+              <ProxyCard label="Nivel General Proxy" value={proxy.index.nivel_general?.toLocaleString("es-AR") || "—"} sub={proxy.index.fecha} accent />
+              <ProxyCard label="Var. mensual estimada" value={proxy.index.variacion_periodo != null ? `+${proxy.index.variacion_periodo}%` : "—"} />
+              <ProxyCard label="Precios recolectados" value={proxy.index.n_precios_recolectados || "0"} />
+              <ProxyCard label="Cobertura canasta" value={`${proxy.index.cobertura_pct || "88.5"}%`} />
+            </div>
+          ) : proxyStatus === "loading" ? (
+            <div style={{ fontSize: 12, color: C.muted, fontFamily: MONO, textAlign: "center", padding: 16 }}>Conectando con R&V backend...</div>
+          ) : (
+            <div style={{ fontSize: 12, color: C.dim, fontFamily: MONO, textAlign: "center", padding: 16 }}>
+              Backend no disponible — mostrando datos INDEC históricos.
+              <br/><span style={{ fontSize: 10 }}>API: {API_BASE}</span>
+            </div>
+          )}
         </div>
 
         {/* ── TAB CONTENT ── */}
@@ -141,73 +187,40 @@ export default function IPCDashboard() {
           <>
             {/* Time range selector */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <span style={{ fontSize: 11, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase" }}>Evolución del índice nivel general</span>
-              <div style={{ display: "flex", gap: 2 }}>
-                {[["all","Todo"],["3y","3 años"],["2y","2 años"],["1y","1 año"]].map(([k,l]) => (
-                  <button key={k} onClick={() => setTimeRange(k)} style={{
-                    background: timeRange===k ? C.tealBg : "transparent", color: timeRange===k ? C.teal : C.dim,
-                    border: `1px solid ${timeRange===k ? C.tealBorder : "transparent"}`, borderRadius: 5,
-                    padding: "3px 10px", fontSize: 10, fontFamily: MONO, cursor: "pointer", fontWeight: 500
-                  }}>{l}</button>
-                ))}
-              </div>
+              <span style={{ fontSize: 11, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase" }}>Variaciones históricas</span>
+              <TimeRangeSelector value={timeRange} onChange={setTimeRange} />
             </div>
 
-            {/* Index chart */}
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 8px 8px 0", marginBottom: 16 }}>
-              <ResponsiveContainer width="100%" height={220}>
-                <AreaChart data={filtered} margin={{ top: 4, right: 16, bottom: 0, left: 8 }}>
-                  <defs>
-                    <linearGradient id="gIdx" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={C.teal} stopOpacity={0.2} />
-                      <stop offset="100%" stopColor={C.teal} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
+            {/* VAR MENSUAL bar chart */}
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 8px 8px 0", marginBottom: 12 }}>
+              <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginLeft: 16, marginBottom: 8 }}>Variación mensual (%)</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={filteredMensual} margin={{ top: 4, right: 16, bottom: 0, left: 8 }}>
                   <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.dim, fontFamily: MONO }} interval={Math.max(1, Math.floor(filtered.length / 12))} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 9, fill: C.dim, fontFamily: MONO }} axisLine={false} tickLine={false} tickFormatter={v => v >= 1000 ? `${(v/1000).toFixed(0)}k` : v} />
-                  <Tooltip contentStyle={tooltipStyle} formatter={(v) => [fmtIdx(v), "Índice"]} labelFormatter={l => l} />
-                  <Area type="monotone" dataKey="indice" stroke={C.teal} strokeWidth={2} fill="url(#gIdx)" dot={false} />
-                </AreaChart>
+                  <XAxis dataKey="label" tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} interval={Math.max(1, Math.floor(filteredMensual.length / 12))} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={v => [`${fmt(v)}%`, "Var. mensual"]} />
+                  <ReferenceLine y={0} stroke={C.dim} strokeDasharray="2 2" />
+                  <Bar dataKey="varMensual" radius={[2,2,0,0]} fill={C.teal} fillOpacity={0.7} />
+                </BarChart>
               </ResponsiveContainer>
             </div>
 
-            {/* Monthly & YoY var charts */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 8px 8px 0" }}>
-                <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginLeft: 16, marginBottom: 8 }}>Variación mensual (%)</div>
-                <ResponsiveContainer width="100%" height={160}>
-                  <BarChart data={filtered.slice(1)} margin={{ top: 0, right: 12, bottom: 0, left: 4 }}>
-                    <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} interval={Math.max(1, Math.floor(filtered.length / 8))} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} axisLine={false} tickLine={false} />
-                    <Tooltip contentStyle={tooltipStyle} formatter={v => [`${fmt(v)}%`, "Var. mensual"]} />
-                    <ReferenceLine y={0} stroke={C.dim} strokeDasharray="2 2" />
-                    <Bar dataKey="varMensual" radius={[2,2,0,0]} fill={C.teal} fillOpacity={0.7} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 8px 8px 0" }}>
-                <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginLeft: 16, marginBottom: 8 }}>Variación interanual (%)</div>
-                <ResponsiveContainer width="100%" height={160}>
-                  <AreaChart data={filtered.filter(d => d.varYoY != null)} margin={{ top: 0, right: 12, bottom: 0, left: 4 }}>
-                    <defs>
-                      <linearGradient id="gYoY" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={C.red} stopOpacity={0.2} />
-                        <stop offset="100%" stopColor={C.red} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} interval={Math.max(1, Math.floor(filtered.length / 8))} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} axisLine={false} tickLine={false} />
-                    <Tooltip contentStyle={tooltipStyle} formatter={v => [`${fmt(v)}%`, "Var. i.a."]} />
-                    <Area type="monotone" dataKey="varYoY" stroke={C.red} strokeWidth={1.5} fill="url(#gYoY)" dot={false} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
+            {/* VAR INTERANUAL bar chart */}
+            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 8px 8px 0", marginBottom: 16 }}>
+              <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginLeft: 16, marginBottom: 8 }}>Variación interanual (%)</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={filteredYoY} margin={{ top: 4, right: 16, bottom: 0, left: 8 }}>
+                  <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} interval={Math.max(1, Math.floor(filteredYoY.length / 12))} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={tooltipStyle} formatter={v => [`${fmt(v)}%`, "Var. i.a."]} />
+                  <Bar dataKey="varYoY" radius={[2,2,0,0]} fill={C.red} fillOpacity={0.6} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
 
-            {/* Quick division ranking */}
+            {/* Division ranking */}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16 }}>
               <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>
                 Divisiones COICOP — Var. mensual feb 2026
@@ -216,8 +229,8 @@ export default function IPCDashboard() {
                 {divData.map((d, i) => (
                   <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <span style={{ fontSize: 11, color: C.muted, fontFamily: MONO, width: 150, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.short}</span>
-                    <div style={{ flex: 1, height: 16, background: C.bg, borderRadius: 3, overflow: "hidden", position: "relative" }}>
-                      <div style={{ height: "100%", width: `${Math.min(100, Math.max(2, (d.lastVar / 8) * 100))}%`, background: d.color, borderRadius: 3, opacity: 0.7, transition: "width 0.5s" }} />
+                    <div style={{ flex: 1, height: 16, background: C.bg, borderRadius: 3, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, Math.max(2, (d.lastVar / 8) * 100))}%`, background: d.color, borderRadius: 3, opacity: 0.7 }} />
                     </div>
                     <span style={{ fontSize: 12, fontFamily: MONO, color: d.lastVar > latestVarVal ? C.red : C.teal, fontWeight: 600, width: 52, textAlign: "right" }}>
                       {d.lastVar > 0 ? "+" : ""}{fmt(d.lastVar)}%
@@ -241,7 +254,6 @@ export default function IPCDashboard() {
                   background: selDiv === i ? DIV_COLORS[i] + "18" : C.card,
                   border: `1px solid ${selDiv === i ? DIV_COLORS[i] + "50" : C.border}`,
                   borderRadius: 8, padding: "10px 12px", cursor: "pointer", textAlign: "left",
-                  transition: "all 0.15s"
                 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: selDiv === i ? DIV_COLORS[i] : C.text, marginBottom: 3 }}>{d.short}</div>
                   <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted }}>Peso: {fmt(d.peso,1)}%</div>
@@ -251,15 +263,10 @@ export default function IPCDashboard() {
                 </button>
               ))}
             </div>
-
             {selDivData && (
               <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 8px 8px 0" }}>
-                <div style={{ fontSize: 11, fontFamily: MONO, color: DIV_COLORS[selDiv], letterSpacing: 0.5, marginLeft: 16, marginBottom: 4 }}>
-                  {selDivData.nombre}
-                </div>
-                <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, marginLeft: 16, marginBottom: 10 }}>
-                  Variación mensual — últimos 24 meses
-                </div>
+                <div style={{ fontSize: 11, fontFamily: MONO, color: DIV_COLORS[selDiv], marginLeft: 16, marginBottom: 4 }}>{selDivData.nombre}</div>
+                <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, marginLeft: 16, marginBottom: 10 }}>Variación mensual — últimos 24 meses</div>
                 <ResponsiveContainer width="100%" height={200}>
                   <BarChart data={selDivChart} margin={{ top: 4, right: 16, bottom: 0, left: 8 }}>
                     <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
@@ -272,14 +279,13 @@ export default function IPCDashboard() {
                 </ResponsiveContainer>
               </div>
             )}
-
-            {/* Division comparison table */}
+            {/* Division table */}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden", marginTop: 16 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: MONO }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${C.borderLt}` }}>
                     {["División","Peso","Var. mensual","Mes anterior","Tendencia"].map(h => (
-                      <th key={h} style={{ textAlign: h === "División" ? "left" : "right", padding: "10px 12px", color: C.dim, fontWeight: 500, fontSize: 9, letterSpacing: 0.8, textTransform: "uppercase" }}>{h}</th>
+                      <th key={h} style={{ textAlign: h==="División"?"left":"right", padding: "10px 12px", color: C.dim, fontWeight: 500, fontSize: 9, letterSpacing: 0.8, textTransform: "uppercase" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -288,10 +294,7 @@ export default function IPCDashboard() {
                     const trend = d.lastVar - d.prevVar;
                     return (
                       <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                        <td style={{ padding: "8px 12px", color: C.text }}>
-                          <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: d.color, marginRight: 8 }} />
-                          {d.short}
-                        </td>
+                        <td style={{ padding: "8px 12px", color: C.text }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: d.color, marginRight: 8 }} />{d.short}</td>
                         <td style={{ textAlign: "right", padding: "8px 12px", color: C.muted }}>{fmt(d.peso,1)}%</td>
                         <td style={{ textAlign: "right", padding: "8px 12px", fontWeight: 600, color: d.lastVar > latestVarVal ? C.red : C.teal }}>+{fmt(d.lastVar)}%</td>
                         <td style={{ textAlign: "right", padding: "8px 12px", color: C.muted }}>+{fmt(d.prevVar)}%</td>
@@ -309,10 +312,7 @@ export default function IPCDashboard() {
 
         {tab === "categorias" && (
           <>
-            {/* Núcleo vs Estacional vs Regulados */}
-            <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>
-              Categorías IPC — Núcleo · Estacional · Regulados
-            </div>
+            <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>Categorías IPC — Núcleo · Estacional · Regulados</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 16 }}>
               {[["Núcleo", C.teal], ["Estacional", C.amber], ["Regulados", C.purple]].map(([name, color]) => {
                 const d = RAW.categorias[name];
@@ -326,29 +326,20 @@ export default function IPCDashboard() {
                 );
               })}
             </div>
-
-            {/* Categories comparison chart */}
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 8px 8px 0" }}>
-              <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginLeft: 16, marginBottom: 10 }}>
-                Var. mensual por categoría — últimos 24 meses
-              </div>
+              <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginLeft: 16, marginBottom: 10 }}>Var. mensual por categoría — últimos 24 meses</div>
               <ResponsiveContainer width="100%" height={220}>
                 <LineChart data={RAW.datesVar.slice(-24).map((date, i) => {
                   const idx = RAW.datesVar.length - 24 + i;
-                  return {
-                    date, label: monthLabel(date),
-                    nucleo: RAW.categorias["Núcleo"].varMensual[idx],
-                    estacional: RAW.categorias["Estacional"].varMensual[idx],
-                    regulados: RAW.categorias["Regulados"].varMensual[idx],
-                  };
+                  return { date, label: monthLabel(date), nucleo: RAW.categorias["Núcleo"].varMensual[idx], estacional: RAW.categorias["Estacional"].varMensual[idx], regulados: RAW.categorias["Regulados"].varMensual[idx] };
                 })} margin={{ top: 4, right: 16, bottom: 0, left: 8 }}>
                   <CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="label" tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fontSize: 8, fill: C.dim, fontFamily: MONO }} axisLine={false} tickLine={false} />
                   <Tooltip contentStyle={tooltipStyle} formatter={(v, n) => [`${fmt(v)}%`, n === "nucleo" ? "Núcleo" : n === "estacional" ? "Estacional" : "Regulados"]} />
-                  <Line type="monotone" dataKey="nucleo" stroke={C.teal} strokeWidth={2} dot={false} name="nucleo" />
-                  <Line type="monotone" dataKey="estacional" stroke={C.amber} strokeWidth={2} dot={false} name="estacional" />
-                  <Line type="monotone" dataKey="regulados" stroke={C.purple} strokeWidth={2} dot={false} name="regulados" />
+                  <Line type="monotone" dataKey="nucleo" stroke={C.teal} strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="estacional" stroke={C.amber} strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="regulados" stroke={C.purple} strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
               <div style={{ display: "flex", justifyContent: "center", gap: 20, marginTop: 8, marginBottom: 4 }}>
@@ -359,119 +350,27 @@ export default function IPCDashboard() {
                 ))}
               </div>
             </div>
-
-            {/* Historical milestones */}
-            <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginTop: 16 }}>
-              <div style={{ fontSize: 10, fontFamily: MONO, color: C.muted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 12 }}>
-                Hitos de inflación interanual
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
-                {[
-                  { date: "Dic 2023", val: "211.4%", desc: "Pico máximo" },
-                  { date: "Feb 2024", val: "276.2%", desc: "Máximo i.a." },
-                  { date: "Feb 2026", val: "33.1%", desc: "Último dato" },
-                  { date: "Dic 2023", val: "25.5%", desc: "Máx. mensual" },
-                ].map((m, i) => (
-                  <div key={i} style={{ background: C.bg, borderRadius: 6, padding: "10px 12px" }}>
-                    <div style={{ fontSize: 9, fontFamily: MONO, color: C.dim }}>{m.date}</div>
-                    <div style={{ fontSize: 20, fontWeight: 700, color: C.text, fontFamily: MONO }}>{m.val}</div>
-                    <div style={{ fontSize: 10, color: C.muted }}>{m.desc}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
           </>
         )}
-
-        {/* ── R&V IPC PROXY — LIVE DATA ── */}
-        <div style={{
-          background: C.card, border: `1px solid ${proxyStatus === "ok" ? C.tealBorder : C.border}`,
-          borderRadius: 10, padding: 16, marginTop: 20, marginBottom: 8,
-        }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div>
-              <span style={{ fontSize: 11, fontFamily: MONO, color: C.teal, letterSpacing: 1.5, textTransform: "uppercase" }}>
-                R&V IPC PROXY — EN VIVO
-              </span>
-              <span style={{
-                fontSize: 9, fontFamily: MONO, marginLeft: 10, padding: "2px 8px", borderRadius: 4,
-                background: proxyStatus === "ok" ? "rgba(67,217,173,0.15)" : proxyStatus === "loading" ? "rgba(240,180,41,0.15)" : "rgba(239,100,97,0.15)",
-                color: proxyStatus === "ok" ? C.teal : proxyStatus === "loading" ? C.amber : C.red,
-              }}>
-                {proxyStatus === "ok" ? "CONECTADO" : proxyStatus === "loading" ? "CONECTANDO..." : "OFFLINE"}
-              </span>
-            </div>
-            <button onClick={() => {
-              setProxyStatus("loading");
-              fetch(`${API_BASE}/api/v1/index/nivel-general`).then(r => r.json())
-                .then(d => { setProxy(p => ({ ...p, index: d })); setProxyStatus("ok"); })
-                .catch(() => setProxyStatus("error"));
-            }} style={{
-              background: "transparent", border: `1px solid ${C.border}`, borderRadius: 6,
-              color: C.muted, fontSize: 10, fontFamily: MONO, padding: "4px 12px", cursor: "pointer",
-            }}>Actualizar</button>
-          </div>
-
-          {proxyStatus === "ok" && proxy?.index ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-              <div style={{ background: C.bg, borderRadius: 6, padding: "10px 12px" }}>
-                <div style={{ fontSize: 9, fontFamily: MONO, color: C.dim }}>Nivel General Proxy</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: C.teal, fontFamily: MONO }}>
-                  {proxy.index.nivel_general?.toLocaleString("es-AR") || "—"}
-                </div>
-                <div style={{ fontSize: 9, color: C.muted, fontFamily: MONO }}>{proxy.index.fecha}</div>
-              </div>
-              <div style={{ background: C.bg, borderRadius: 6, padding: "10px 12px" }}>
-                <div style={{ fontSize: 9, fontFamily: MONO, color: C.dim }}>Var. Período</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: C.text, fontFamily: MONO }}>
-                  {proxy.index.variacion_periodo != null ? `+${proxy.index.variacion_periodo}%` : "—"}
-                </div>
-              </div>
-              <div style={{ background: C.bg, borderRadius: 6, padding: "10px 12px" }}>
-                <div style={{ fontSize: 9, fontFamily: MONO, color: C.dim }}>Precios Recolectados</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: C.text, fontFamily: MONO }}>
-                  {proxy.index.n_precios_recolectados || "0"}
-                </div>
-              </div>
-              <div style={{ background: C.bg, borderRadius: 6, padding: "10px 12px" }}>
-                <div style={{ fontSize: 9, fontFamily: MONO, color: C.dim }}>Cobertura Canasta</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: C.text, fontFamily: MONO }}>
-                  {proxy.index.cobertura_pct || "88.5"}%
-                </div>
-              </div>
-            </div>
-          ) : proxyStatus === "loading" ? (
-            <div style={{ fontSize: 12, color: C.muted, fontFamily: MONO, textAlign: "center", padding: 20 }}>
-              Conectando con R&V backend...
-            </div>
-          ) : (
-            <div style={{ fontSize: 12, color: C.dim, fontFamily: MONO, textAlign: "center", padding: 20 }}>
-              Backend no disponible — mostrando datos INDEC históricos.
-              <br/>
-              <span style={{ fontSize: 10 }}>API: {API_BASE}</span>
-            </div>
-          )}
-        </div>
 
         {/* ── FOOTER ── */}
         <div style={{ marginTop: 20, padding: "14px 0", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: MONO, color: C.dim, flexWrap: "wrap", gap: 8 }}>
           <span>Fuente: INDEC · Metodología N°32 · IPC base dic 2016=100 · Fórmula de Laspeyres · Ponderadores ENGHo 2004/05</span>
-          <span>Pipeline Capital · Inflación Proxy</span>
+          <span>Pipeline Capital · R&V IPC</span>
         </div>
       </div>
     </div>
   );
 }
 
-function MetricBox({ label, value, sub, accent, delta }) {
+function MetricBox({ label, value, sub, accent, delta, highlight }) {
+  const bg = accent ? C.tealBg : highlight ? "rgba(91,156,246,0.08)" : C.card;
+  const borderColor = accent ? C.tealBorder : highlight ? "rgba(91,156,246,0.25)" : C.border;
+  const valColor = accent ? C.teal : highlight ? C.blue : C.text;
   return (
-    <div style={{
-      background: accent ? C.tealBg : C.card,
-      border: `1px solid ${accent ? C.tealBorder : C.border}`,
-      borderRadius: 10, padding: "14px 16px",
-    }}>
+    <div style={{ background: bg, border: `1px solid ${borderColor}`, borderRadius: 10, padding: "14px 16px" }}>
       <div style={{ fontSize: 9, fontFamily: MONO, color: C.muted, letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 5 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 700, color: accent ? C.teal : C.text, lineHeight: 1.1, fontFamily: FONT }}>
+      <div style={{ fontSize: 24, fontWeight: 700, color: valColor, lineHeight: 1.1, fontFamily: FONT }}>
         {value}
         {delta != null && (
           <span style={{ fontSize: 10, fontFamily: MONO, marginLeft: 6, color: delta > 0 ? C.red : C.teal }}>
@@ -480,6 +379,16 @@ function MetricBox({ label, value, sub, accent, delta }) {
         )}
       </div>
       {sub && <div style={{ fontSize: 10, color: C.muted, marginTop: 4, fontFamily: MONO }}>{sub}</div>}
+    </div>
+  );
+}
+
+function ProxyCard({ label, value, sub, accent }) {
+  return (
+    <div style={{ background: C.bg, borderRadius: 6, padding: "10px 12px" }}>
+      <div style={{ fontSize: 9, fontFamily: MONO, color: C.dim }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: accent ? C.teal : C.text, fontFamily: MONO }}>{value}</div>
+      {sub && <div style={{ fontSize: 9, color: C.muted, fontFamily: MONO }}>{sub}</div>}
     </div>
   );
 }
