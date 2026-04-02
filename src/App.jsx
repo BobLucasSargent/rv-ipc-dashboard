@@ -124,7 +124,7 @@ export default function IPCDashboard() {
 
   // Intrames chart data
   const intramesChartData = useMemo(() => {
-    if (!intrames?.serie_diaria) return [];
+    if (!intrames?.serie_diaria || !Array.isArray(intrames.serie_diaria)) return [];
     return intrames.serie_diaria.map(d => ({
       fecha: d.fecha,
       label: dayLabel(d.fecha),
@@ -134,7 +134,7 @@ export default function IPCDashboard() {
 
   // Intrames division bars
   const intramesDivData = useMemo(() => {
-    if (!intrames?.variaciones_por_division) return [];
+    if (!intrames?.variaciones_por_division || typeof intrames.variaciones_por_division !== 'object') return [];
     return Object.entries(intrames.variaciones_por_division)
       .filter(([_, v]) => v.tiene_datos && v.variacion_acumulada != null)
       .map(([cod, v], i) => ({
