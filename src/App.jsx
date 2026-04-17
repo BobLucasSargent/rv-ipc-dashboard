@@ -497,7 +497,10 @@ export default function IPCDashboard() {
                           +{fmt(varMensual)}%
                           {d.intramesVar != null && <span style={{ fontSize: 8, color: C.orange, marginLeft: 4 }}>R&V</span>}
                         </td>
-                        <td style={{ textAlign: "right", padding: "8px 12px", color: C.dim, fontStyle: "italic" }}>—</td>
+                        <td style={{ textAlign: "right", padding: "8px 12px", color: C.muted, fontFamily: MONO }}>
+                          +{fmt(d.varMensual[d.varMensual.length - 2])}%
+                          <span style={{ fontSize: 8, color: C.dim, marginLeft: 3 }}>mar</span>
+                        </td>
                         <td style={{ textAlign: "right", padding: "8px 12px", color: C.dim, fontSize: 10 }}>—</td>
                       </tr>
                     );
