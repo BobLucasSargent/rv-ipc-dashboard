@@ -501,7 +501,16 @@ export default function IPCDashboard() {
                           +{fmt(d.varMensual[d.varMensual.length - 2])}%
                           <span style={{ fontSize: 8, color: C.dim, marginLeft: 3 }}>mar</span>
                         </td>
-                        <td style={{ textAlign: "right", padding: "8px 12px", color: C.dim, fontSize: 10 }}>—</td>
+                        <td style={{ textAlign: "right", padding: "8px 12px", fontSize: 11, fontFamily: MONO }}>
+                          {(() => {
+                            const curr = d.intramesVar ?? d.lastVar;
+                            const prev = d.varMensual[d.varMensual.length - 2];
+                            const diff = curr - prev;
+                            if (diff > 0.2) return <span style={{ color: C.red }}>▲ +{fmt(diff)}pp</span>;
+                            if (diff < -0.2) return <span style={{ color: C.teal }}>▼ {fmt(diff)}pp</span>;
+                            return <span style={{ color: C.dim }}>→ estable</span>;
+                          })()}
+                        </td>
                       </tr>
                     );
                   })}
